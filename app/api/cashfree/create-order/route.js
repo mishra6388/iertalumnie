@@ -9,23 +9,22 @@ import { getMembershipPlan } from '@/constants/membershipPlans';
  */
 export async function POST(req) {
   try {
-    // Parse request
+    // ----- ADD THIS BLOCK AT THE VERY START -----
     const body = await req.json();
-
-    // Strict validation
-    const requiredFields = ['planId', 'userId', 'userEmail', 'userName'];
-    const missingFields = requiredFields.filter(f => !body[f] || body[f].toString().trim() === '');
-    if (missingFields.length > 0) {
-      console.warn('Missing required fields:', missingFields);
+    console.log('Received create-order request:', body); // logs request body in Vercel logs
+    const { planId, userId, userEmail, userName } = body;
+    if (!planId || !userId || !userEmail || !userName) {
+      console.warn('Missing required fields:', { planId, userId, userEmail, userName });
       return NextResponse.json(
-        { error: `Missing required fields: ${missingFields.join(', ')}` },
+        { error: 'Missing required fields' },
         { status: 400 }
       );
     }
+    // ----- END OF LOGGING BLOCK -----
 
-    const { planId, userId, userEmail, userName, userPhone } = body;
+    // Now continue with your existing code:
+    const { userPhone } = body;
 
-    // Validate membership plan
     const plan = getMembershipPlan(planId);
     if (!plan) {
       console.warn('Invalid plan selected:', planId);
@@ -35,10 +34,7 @@ export async function POST(req) {
       );
     }
 
-    // Generate unique order ID
     const orderId = `order_${userId}_${planId}_${Date.now()}`;
-
-    // Prepare Cashfree order payload
     const orderPayload = {
       order_id: orderId,
       order_amount: plan.price,
@@ -71,16 +67,13 @@ export async function POST(req) {
     });
 
     const cfData = await cfResponse.json();
-
     if (!cfResponse.ok) {
       console.error('Cashfree API Error:', cfData);
       return NextResponse.json(
         { error: 'Failed to create payment order', details: cfData },
-        { status: 502 } // Bad Gateway
+        { status: 502 }
       );
     }
-
-    // Optional: Save order in your database here
 
     return NextResponse.json({
       success: true,
@@ -90,7 +83,6 @@ export async function POST(req) {
       amount: plan.price,
       planName: plan.name,
     });
-
   } catch (error) {
     console.error('Create order internal error:', error);
     return NextResponse.json(
