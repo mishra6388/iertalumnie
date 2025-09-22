@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { getAllMembershipPlans, formatCurrency } from '@/constants/membershipPlans';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
+import DebugPayment from '@/components/debug/DebugPayment';
 
 /**
  * MembershipPlans Component
@@ -181,6 +182,7 @@ export default function MembershipPlans({ onPlanSelect }) {
             </svg>
             Email confirmation
           </div>
+          <DebugPayment/>
         </div>
       </div>
     </div>

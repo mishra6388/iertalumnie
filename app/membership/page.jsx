@@ -112,62 +112,77 @@ export default function MembershipPage() {
   };
 
   // FIXED: Handle plan selection and initiate payment
-  const handlePlanSelection = async (planId) => {
-    if (!currentUser || !userProfile) {
-      setPaymentStatus({
-        type: 'error',
-        message: 'User information not loaded. Please refresh and try again.',
-      });
-      return;
-    }
+ // In your membership page, replace handlePlanSelection with this:
+const handlePlanSelection = async (planId) => {
+  console.log('Plan selection started:', { planId });
+  console.log('Current user:', { uid: currentUser?.uid, email: currentUser?.email });
+  console.log('User profile:', { displayName: userProfile?.displayName });
 
-    setIsProcessing(true);
+  if (!currentUser) {
+    setPaymentStatus({
+      type: 'error',
+      message: 'Please log in to continue.',
+    });
+    return;
+  }
+
+  if (!userProfile) {
+    setPaymentStatus({
+      type: 'error',
+      message: 'Loading user profile. Please wait and try again.',
+    });
+    return;
+  }
+
+  setIsProcessing(true);
+  
+  try {
+    const requestData = {
+      planId: planId,
+      userId: currentUser.uid,
+      userEmail: currentUser.email,
+      userName: userProfile.displayName || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+      userPhone: userProfile.profile?.phone || '9999999999', // Always provide a phone number
+    };
+
+    console.log('Sending request data:', requestData);
+
+    const response = await fetch('/api/cashfree/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestData),
+    });
     
-    try {
-      // Create payment order with proper user data
-      const response = await fetch('/api/cashfree/create-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          planId: planId,
-          userId: currentUser.uid,
-          userEmail: currentUser.email,
-          userName: userProfile.displayName || currentUser.displayName || 'User',
-          userPhone: userProfile.profile?.phone || null, // Optional phone
-        }),
-      });
+    console.log('Response status:', response.status);
+    const data = await response.json();
+    console.log('Response data:', data);
+    
+    if (data.success) {
+      sessionStorage.setItem(`orderToken_${data.orderId}`, data.orderToken);
       
-      const data = await response.json();
+      const paymentUrl = data.checkoutUrl || `https://payments${
+        process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-test'
+      }.cashfree.com/pg/web/checkout?order_token=${data.orderToken}`;
       
-      if (data.success) {
-        // Store order token for verification later
-        sessionStorage.setItem(`orderToken_${data.orderId}`, data.orderToken);
-        
-        // FIXED: Create payment URL for Cashfree hosted checkout
-        const paymentUrl = `https://payments${
-          process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-test'
-        }.cashfree.com/pg/web/checkout?order_token=${data.orderToken}`;
-        
-        console.log('Redirecting to payment URL:', paymentUrl);
-        
-        // Redirect to Cashfree hosted checkout
-        window.location.href = paymentUrl;
-      } else {
-        setPaymentStatus({
-          type: 'error',
-          message: data.error || 'Failed to initiate payment. Please try again.',
-        });
-      }
-    } catch (error) {
-      console.error('Payment initiation failed:', error);
+      console.log('Redirecting to:', paymentUrl);
+      window.location.href = paymentUrl;
+    } else {
+      console.error('Create order failed:', data);
       setPaymentStatus({
         type: 'error',
-        message: 'Failed to initiate payment. Please try again.',
+        message: data.error || data.message || 'Failed to create payment order.',
       });
-    } finally {
-      setIsProcessing(false);
     }
-  };
+  } catch (error) {
+    console.error('Payment initiation error:', error);
+    setPaymentStatus({
+      type: 'error',
+      message: 'Network error. Please check your connection and try again.',
+    });
+  } finally {
+    setIsProcessing(false);
+  }
+};
 
   if (loading || isProcessing) {
     return (
