@@ -3,65 +3,35 @@
 
 import { useState } from 'react';
 import { getAllMembershipPlans, formatCurrency } from '@/constants/membershipPlans';
-import { getAuth } from 'firebase/auth'; // ✅ to fetch logged-in user
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import DebugPayment from '@/components/debug/DebugPayment';
 
-export default function MembershipPlans() {
+/**
+ * MembershipPlans Component
+ * Displays available membership plans with selection functionality
+ * 
+ * Props:
+ * - onPlanSelect: Function called when user selects a plan
+ */
+export default function MembershipPlans({ onPlanSelect }) {
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [loading, setLoading] = useState(false);
   const plans = getAllMembershipPlans();
 
-  const handlePlanSelect = async (plan) => {
+  const handlePlanSelect = async (planId) => {
     if (loading) return;
+    
     setLoading(true);
-    setSelectedPlan(plan.id);
-
+    setSelectedPlan(planId);
+    
     try {
-      const auth = getAuth();
-      const user = auth.currentUser;
-
-      if (!user) {
-        alert("Please login first to purchase a plan");
-        setLoading(false);
-        return;
+      if (onPlanSelect) {
+        await onPlanSelect(planId);
       }
-
-      // ✅ Prepare payload for API
-      const payload = {
-        planId: plan.id,
-        amount: plan.price,
-        userId: user.uid,
-        userEmail: user.email,
-        userName: user.displayName || "User",
-        userPhone: user.phoneNumber || null,
-      };
-
-      console.log("Sending request data to create-order:", payload);
-
-      // ✅ Call backend API
-      const res = await fetch("/api/cashfree/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      console.log("Create-order response:", data);
-
-      if (!res.ok || !data.success) {
-        throw new Error(data?.data?.error || "Payment initialization failed");
-      }
-
-      // ✅ Redirect to Cashfree checkout
-      if (data.data.paymentLink) {
-        window.location.href = data.data.paymentLink;
-      }
-
     } catch (error) {
-      console.error("Payment failed:", error);
-      alert("Payment failed. Please try again.");
+      console.error('Plan selection failed:', error);
+      // Reset selection on error
       setSelectedPlan(null);
     } finally {
       setLoading(false);
@@ -70,14 +40,15 @@ export default function MembershipPlans() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      {/* Grid of plans */}
       <div className="grid md:grid-cols-2 gap-8">
         {plans.map((plan) => (
           <Card 
             key={plan.id}
             className={`relative transition-all duration-200 hover:shadow-lg ${
               plan.popular ? 'border-blue-500 shadow-lg' : 'hover:border-gray-300'
-            } ${selectedPlan === plan.id ? 'ring-2 ring-blue-500 ring-opacity-50' : ''}`}
+            } ${
+              selectedPlan === plan.id ? 'ring-2 ring-blue-500 ring-opacity-50' : ''
+            }`}
           >
             {/* Popular Badge */}
             {plan.popular && (
@@ -131,10 +102,10 @@ export default function MembershipPlans() {
               </ul>
             </div>
 
-            {/* Action Button */}
+            {/* Plan Action Button */}
             <div className="mt-auto">
               <Button
-                onClick={() => handlePlanSelect(plan)}
+                onClick={() => handlePlanSelect(plan.id)}
                 loading={loading && selectedPlan === plan.id}
                 disabled={loading}
                 variant={plan.popular ? 'primary' : 'outline'}
@@ -143,7 +114,8 @@ export default function MembershipPlans() {
               >
                 {loading && selectedPlan === plan.id 
                   ? 'Processing...' 
-                  : `Choose ${plan.name}`}
+                  : `Choose ${plan.name}`
+                }
               </Button>
             </div>
           </Card>
