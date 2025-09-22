@@ -1,350 +1,255 @@
-// components/membership/CashfreePayment.jsx
 'use client';
-
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getMembershipPlan } from '@/constants/membershipPlans';
-import Button from '@/components/ui/Button';
-import Card from '@/components/ui/Card';
 
-/**
- * CashfreePayment Component - Production Ready
- * Props:
- * - planId: Selected membership plan ID
- * - onSuccess: Function called after successful payment
- * - onCancel: Function called when payment is cancelled
- */
-
-export default function CashfreePayment({ planId, onSuccess, onCancel }) {
-  const { currentUser, userProfile } = useAuth();
+export default function CashfreePayment({ planId, onSuccess, onError }) {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
-  const [sdkLoaded, setSdkLoaded] = useState(false);
   const [error, setError] = useState(null);
-  const [currentOrder, setCurrentOrder] = useState(null);
-
+  const [cashfreeLoaded, setCashfreeLoaded] = useState(false);
+  
   const plan = getMembershipPlan(planId);
 
-  // 🔥 Load Cashfree SDK dynamically
+  // Load Cashfree SDK
   useEffect(() => {
     const loadCashfreeSDK = () => {
-      return new Promise((resolve, reject) => {
-        // Check if SDK is already loaded
-        if (window.Cashfree) {
-          setSdkLoaded(true);
-          resolve(window.Cashfree);
-          return;
-        }
-
-        const script = document.createElement('script');
-        script.src = process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production'
-          ? 'https://sdk.cashfree.com/js/v3/cashfree.js'
-          : 'https://sdk.cashfree.com/js/v3/cashfree.js'; // Same URL for both
-
-        script.onload = () => {
-          if (window.Cashfree) {
-            setSdkLoaded(true);
-            resolve(window.Cashfree);
-          } else {
-            reject(new Error('Cashfree SDK not available'));
-          }
-        };
-
-        script.onerror = () => reject(new Error('Failed to load Cashfree SDK'));
-        document.head.appendChild(script);
-      });
-    };
-
-    loadCashfreeSDK().catch(error => {
-      console.error('Failed to load Cashfree SDK:', error);
-      setError('Failed to load payment system. Please refresh and try again.');
-    });
-  }, []);
-
-  // 🔥 Format currency properly
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(amount);
-  };
-
-  // 🔥 Create order via your API
-  const createOrder = async () => {
-    try {
-      const response = await fetch('/api/cashfree/create-order', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          planId,
-          userId: currentUser.uid,
-          amount: plan.price,
-          customerEmail: currentUser.email,
-          customerPhone: userProfile?.phone || '9999999999',
-          customerName: userProfile?.displayName || currentUser.displayName || 'Alumni Member',
-          returnUrl: `${window.location.origin}/payment/callback`,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        // Handle specific error cases
-        if (data.shouldRedirect === 'signup') {
-          window.location.href = '/auth/signup';
-          return null;
-        }
-        throw new Error(data.error || 'Failed to create order');
+      if (window.Cashfree) {
+        setCashfreeLoaded(true);
+        return;
       }
 
-      return data;
-    } catch (error) {
-      console.error('Create order error:', error);
-      throw error;
-    }
-  };
-
-  // 🔥 Initialize Cashfree payment
-  const initializePayment = async (orderData) => {
-    if (!window.Cashfree) {
-      throw new Error('Cashfree SDK not loaded');
-    }
-
-    const cashfree = window.Cashfree({
-      mode: process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? 'production' : 'sandbox'
-    });
-
-    // Configure payment options
-    const paymentOptions = {
-      paymentSessionId: orderData.paymentSessionId,
-      returnUrl: `${window.location.origin}/payment/callback?orderId=${orderData.orderId}`,
+      const script = document.createElement('script');
+      const environment = process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT || 'sandbox';
+      
+      script.src = environment === 'production' 
+        ? 'https://sdk.cashfree.com/js/v3/cashfree.js'
+        : 'https://sdk.cashfree.com/js/v3/cashfree.sandbox.js';
+        
+      script.onload = () => setCashfreeLoaded(true);
+      script.onerror = () => setError('Failed to load payment gateway');
+      
+      document.head.appendChild(script);
     };
 
-    console.log('🚀 Initializing Cashfree payment:', {
-      orderId: orderData.orderId,
-      sessionId: orderData.paymentSessionId,
-      amount: plan.price,
-    });
+    loadCashfreeSDK();
+  }, []);
 
-    return new Promise((resolve, reject) => {
-      cashfree.checkout(paymentOptions).then((result) => {
-        console.log('✅ Payment completed:', result);
-        resolve({
-          ...result,
-          orderId: orderData.orderId,
-          planId,
-          amount: plan.price,
-        });
-      }).catch((error) => {
-        console.error('❌ Payment failed:', error);
-        reject(error);
-      });
-    });
-  };
-
-  // 🔥 Handle payment process
   const handlePayment = async () => {
-    if (!currentUser || !plan || !sdkLoaded) return;
+    if (!user) {
+      setError('Please login to continue');
+      return;
+    }
+
+    if (!plan) {
+      setError('Invalid membership plan selected');
+      return;
+    }
+
+    if (!cashfreeLoaded) {
+      setError('Payment gateway not loaded. Please refresh the page.');
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
     try {
-      console.log('🔄 Starting payment process for:', {
+      console.log('🚀 Starting payment for:', {
         planId,
-        userId: currentUser.uid,
+        userId: user.uid,
         amount: plan.price,
+        userEmail: user.email,
+        userName: user.displayName
       });
 
-      // Step 1: Create order
-      const orderData = await createOrder();
-      if (!orderData) return; // Handle redirect cases
-
-      setCurrentOrder(orderData);
-      console.log('✅ Order created:', orderData.orderId);
-
-      // Step 2: Initialize payment
-      const paymentResult = await initializePayment(orderData);
-      console.log('✅ Payment result:', paymentResult);
-
-      // Step 3: Handle success
-      if (onSuccess) {
-        onSuccess({
-          orderId: orderData.orderId,
-          paymentResult,
-          plan,
+      // 1. Create order with proper data structure
+      const orderResponse = await fetch('/api/cashfree/create-order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          planId: planId,
+          userId: user.uid,
           amount: plan.price,
-        });
+          customerEmail: user.email || 'test@example.com',
+          customerPhone: user.phoneNumber || '9999999999',
+          customerName: user.displayName || 'Alumni Member',
+          returnUrl: `${window.location.origin}/payment/callback`
+        }),
+      });
+
+      const orderData = await orderResponse.json();
+      console.log('📦 Order creation response:', orderData);
+
+      if (!orderResponse.ok || !orderData.success) {
+        throw new Error(orderData.error || 'Failed to create payment order');
       }
 
-    } catch (error) {
-      console.error('❌ Payment process failed:', error);
-      
-      // User-friendly error messages
-      let errorMessage = 'Payment failed. Please try again.';
-      
-      if (error.message?.includes('network') || error.message?.includes('fetch')) {
-        errorMessage = 'Network error. Please check your connection and try again.';
-      } else if (error.message?.includes('SDK')) {
-        errorMessage = 'Payment system not ready. Please refresh the page.';
-      } else if (error.message?.includes('order')) {
-        errorMessage = 'Failed to create order. Please try again.';
+      // 2. Initialize Cashfree payment
+      const cashfree = window.Cashfree({
+        mode: process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT || 'sandbox'
+      });
+
+      const checkoutOptions = {
+        paymentSessionId: orderData.order.payment_session_id,
+        returnUrl: `${window.location.origin}/payment/callback?orderId=${orderData.orderId}`,
+      };
+
+      console.log('💳 Opening Cashfree checkout with options:', checkoutOptions);
+
+      // 3. Open payment dialog
+      const result = await cashfree.checkout(checkoutOptions);
+      console.log('✅ Payment completed:', result);
+
+      if (result.error) {
+        throw new Error(result.error.message || 'Payment failed');
       }
-      
-      setError(errorMessage);
+
+      // 4. Handle successful payment
+      if (result.redirect) {
+        // User will be redirected to callback page
+        console.log('🔄 Redirecting to callback page...');
+      } else if (result.paymentDetails) {
+        // Payment completed in modal
+        await handlePaymentSuccess(orderData.orderId);
+      }
+
+    } catch (err) {
+      console.error('❌ Payment error:', err);
+      setError(err.message || 'Payment failed. Please try again.');
+      onError?.(err);
     } finally {
       setLoading(false);
     }
   };
 
-  // 🔥 Handle cancel
-  const handleCancel = () => {
-    if (loading) return; // Prevent cancel during processing
-    
-    if (onCancel) {
-      onCancel();
+  const handlePaymentSuccess = async (orderId) => {
+    try {
+      // Verify payment on server
+      const verifyResponse = await fetch('/api/cashfree/verify-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          orderId,
+          userId: user.uid,
+        }),
+      });
+
+      const verifyData = await verifyResponse.json();
+      console.log('✅ Payment verification:', verifyData);
+
+      if (verifyData.success) {
+        onSuccess?.(verifyData);
+      } else {
+        throw new Error(verifyData.message || 'Payment verification failed');
+      }
+    } catch (err) {
+      console.error('❌ Verification error:', err);
+      setError('Payment verification failed');
+      onError?.(err);
     }
   };
 
   if (!plan) {
     return (
-      <Card>
-        <div className="text-center py-8">
-          <p className="text-red-600">Invalid membership plan selected.</p>
-          <Button onClick={handleCancel} className="mt-4">
-            Go Back
-          </Button>
-        </div>
-      </Card>
-    );
-  }
-
-  if (!currentUser) {
-    return (
-      <Card>
-        <div className="text-center py-8">
-          <p className="text-red-600">Please login to proceed with payment.</p>
-          <Button onClick={() => window.location.href = '/auth/login'} className="mt-4">
-            Login
-          </Button>
-        </div>
-      </Card>
+      <div className="text-center py-8">
+        <p className="text-red-500">Invalid plan selected</p>
+      </div>
     );
   }
 
   return (
-    <Card title="Complete Your Payment" className="max-w-md mx-auto">
+    <div className="bg-white rounded-lg shadow-lg p-6 max-w-md mx-auto">
+      {/* Plan Details */}
+      <div className="text-center mb-6">
+        <h3 className="text-2xl font-bold text-gray-800 mb-2">
+          {plan.name}
+        </h3>
+        <div className="text-3xl font-bold text-blue-600 mb-2">
+          ₹{plan.price.toLocaleString()}
+          <span className="text-sm text-gray-500 ml-2">
+            / {plan.durationType === 'annual' ? '1 year' : 'lifetime'}
+          </span>
+        </div>
+      </div>
+
+      {/* Features */}
+      <div className="mb-6">
+        <h4 className="font-semibold mb-3 text-gray-700">What's included:</h4>
+        <ul className="space-y-2">
+          {plan.features.map((feature, index) => (
+            <li key={index} className="flex items-center text-sm text-gray-600">
+              <svg className="w-4 h-4 text-green-500 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+              </svg>
+              {feature}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       {/* Error Display */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
           <div className="flex items-center">
-            <span className="text-red-500 mr-2">⚠️</span>
-            <span className="text-sm">{error}</span>
+            <svg className="w-5 h-5 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <p className="text-red-700 text-sm">{error}</p>
           </div>
         </div>
       )}
 
-      {/* Loading SDK */}
-      {!sdkLoaded && !error && (
-        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg mb-6">
-          <div className="flex items-center">
-            <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent mr-3"></div>
-            <span className="text-sm">Initializing payment system...</span>
+      {/* Payment Button */}
+      <button
+        onClick={handlePayment}
+        disabled={loading || !cashfreeLoaded || !user}
+        className={`w-full py-3 px-4 rounded-lg font-semibold text-white transition-all duration-200 ${
+          loading || !cashfreeLoaded || !user
+            ? 'bg-gray-400 cursor-not-allowed'
+            : 'bg-blue-600 hover:bg-blue-700 transform hover:scale-105'
+        }`}
+      >
+        {loading ? (
+          <div className="flex items-center justify-center">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-2"></div>
+            Processing...
           </div>
+        ) : !cashfreeLoaded ? (
+          'Loading Payment Gateway...'
+        ) : !user ? (
+          'Please Login First'
+        ) : (
+          `Pay ₹${plan.price.toLocaleString()} Now`
+        )}
+      </button>
+
+      {/* Trust Indicators */}
+      <div className="mt-4 flex items-center justify-center space-x-4 text-xs text-gray-500">
+        <div className="flex items-center">
+          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m0 0v2m0-2h2m-2 0H10m9-9a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          SSL Secured
+        </div>
+        <div className="flex items-center">
+          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          PCI Compliant
+        </div>
+      </div>
+
+      {/* Debug Info (remove in production) */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="mt-4 p-2 bg-gray-100 rounded text-xs text-gray-600">
+          <strong>Debug:</strong> Plan: {planId}, User: {user?.uid}, Amount: {plan.price}
         </div>
       )}
-
-      {/* Plan Details */}
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6 mb-6">
-        <h3 className="font-semibold text-gray-900 mb-4">Order Summary</h3>
-        
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
-            <span className="text-gray-600">Plan:</span>
-            <span className="font-medium text-gray-900">{plan.name}</span>
-          </div>
-          
-          <div className="flex justify-between items-center">
-            <span className="text-gray-600">Duration:</span>
-            <span className="text-gray-700">{plan.duration}</span>
-          </div>
-          
-          <div className="border-t border-gray-200 pt-3">
-            <div className="flex justify-between items-center">
-              <span className="text-lg font-semibold text-gray-900">Total:</span>
-              <span className="text-xl font-bold text-blue-600">
-                {formatCurrency(plan.price)}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Customer Details */}
-      <div className="bg-gray-50 rounded-lg p-4 mb-6">
-        <h4 className="font-medium text-gray-900 mb-3">Billing Information</h4>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-gray-600">Name:</span>
-            <span className="text-gray-900">
-              {userProfile?.displayName || currentUser.displayName || 'Alumni Member'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Email:</span>
-            <span className="text-gray-900">{currentUser.email}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Current Order Info */}
-      {currentOrder && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-6">
-          <div className="text-sm text-green-800">
-            <strong>Order ID:</strong> {currentOrder.orderId}
-          </div>
-        </div>
-      )}
-
-      {/* Payment Buttons */}
-      <div className="space-y-4">
-        <Button
-          onClick={handlePayment}
-          loading={loading}
-          disabled={!sdkLoaded || loading}
-          className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800"
-          size="lg"
-        >
-          {loading ? (
-            <div className="flex items-center justify-center">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-2"></div>
-              Processing Payment...
-            </div>
-          ) : (
-            `Pay ${formatCurrency(plan.price)} Securely`
-          )}
-        </Button>
-
-        <button
-          onClick={handleCancel}
-          disabled={loading}
-          className="w-full text-sm text-gray-500 hover:text-gray-700 py-2 transition-colors"
-        >
-          ← Back to Plans
-        </button>
-      </div>
-
-      {/* Security Badge */}
-      <div className="mt-6 text-center">
-        <div className="inline-flex items-center justify-center px-3 py-1 text-xs bg-green-100 text-green-800 rounded-full">
-          <span className="mr-1">🔒</span>
-          Secured by Cashfree
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          256-bit SSL encrypted • PCI DSS compliant
-        </p>
-      </div>
-    </Card>
+    </div>
   );
 }
