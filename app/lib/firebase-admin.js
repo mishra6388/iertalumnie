@@ -1,24 +1,19 @@
-import admin from "firebase-admin/app";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
-let db;
-if (!admin.getApps().length) {
-  if (!process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
-    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_BASE64 env variable");
-  }
+let app;
 
+if (!getApps().length) {
   const serviceAccount = JSON.parse(
     Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8")
   );
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId: serviceAccount.project_id,
+  app = initializeApp({
+    credential: cert(serviceAccount),
   });
-
-  db = getFirestore();
 } else {
-  db = getFirestore(admin.getApps()[0]);
+  app = getApps()[0];
 }
 
-export { db };
+export const db = getFirestore(app);
+export default app;

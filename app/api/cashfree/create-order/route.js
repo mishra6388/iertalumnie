@@ -1,61 +1,58 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
 
+/**
+ * Create Cashfree Order
+ * POST /api/cashfree/create-order
+ * Body: { orderId, orderAmount, customerId, customerEmail, customerPhone, returnUrl }
+ */
 export async function POST(req) {
   try {
     const body = await req.json();
-    console.log('Received create-order request:', body);
+    const { orderId, orderAmount, customerId, customerEmail, customerPhone, returnUrl } = body;
 
-    const { planId, userId, userEmail, userName, userPhone } = body;
-
-    if (!planId || !userId || !userEmail || !userName || !userPhone) {
-      console.warn('Missing required fields:', { planId, userId, userEmail, userName, userPhone });
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    if (!orderId || !orderAmount || !customerId) {
+      return NextResponse.json(
+        { error: "Missing required fields" },
+        { status: 400 }
+      );
     }
 
-    // Create order payload for Cashfree
-    const orderPayload = {
-      order_id: `ALUMNI_${Date.now()}`, // unique order id
-      order_amount: body.amount || 500, // fallback amount
-      customer_details: {
-        customer_id: userId,
-        customer_email: userEmail,
-        customer_name: userName,
-        customer_phone: userPhone,
+    const res = await fetch(`${process.env.CASHFREE_BASE_URL}/pg/orders`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-client-id": process.env.CASHFREE_APP_ID,
+        "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+        "x-api-version": "2023-08-01",
       },
-      order_currency: 'INR',
-    };
-
-    // Call Cashfree API (server-side)
-    const cashfreeResponse = await fetch(
-      `https://api${process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-sandbox'}.cashfree.com/pg/orders`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-client-id': process.env.CASHFREE_CLIENT_ID,
-          'x-client-secret': process.env.CASHFREE_CLIENT_SECRET,
+      body: JSON.stringify({
+        order_id: orderId,
+        order_amount: orderAmount,
+        order_currency: "INR",
+        customer_details: {
+          customer_id: customerId,
+          customer_email: customerEmail,
+          customer_phone: customerPhone,
         },
-        body: JSON.stringify(orderPayload),
-      }
-    );
+        order_meta: {
+          return_url: returnUrl, // where user goes after payment
+        },
+      }),
+    });
 
-    const data = await cashfreeResponse.json();
-    console.log('Cashfree create order response:', data);
+    const data = await res.json();
 
-    if (!data.order_id || !data.order_token) {
-      return NextResponse.json({ error: 'Failed to create Cashfree order', details: data }, { status: 500 });
+    if (!res.ok) {
+      console.error("Cashfree Create Order Error:", data);
+      return NextResponse.json(
+        { error: "Failed to create Cashfree order", details: data },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({
-      success: true,
-      orderId: data.order_id,
-      orderToken: data.order_token,
-      checkoutUrl: `https://payments${
-        process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-sandbox'
-      }.cashfree.com/pg/web/checkout?order_token=${data.order_token}`,
-    });
-  } catch (error) {
-    console.error('Create order error:', error);
-    return NextResponse.json({ error: 'Server error', details: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, order: data });
+  } catch (err) {
+    console.error("Internal Error Create Order:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
