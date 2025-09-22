@@ -5,28 +5,32 @@ export async function POST(req) {
   try {
     const body = await req.json();
     const {
-      orderId,
-      orderAmount,
-      customerId,
+      planId,
+      userId,
+      amount,
       customerEmail,
       customerPhone,
       returnUrl,
     } = body;
 
-    // ✅ Fill defaults if missing
-    if (!orderId || !orderAmount || !customerId) {
+    // ✅ Validate minimum required fields
+    if (!planId || !userId || !amount) {
       return NextResponse.json(
-        { success: false, error: "Missing required fields: orderId, orderAmount, customerId" },
+        { success: false, error: "Missing required fields: planId, userId, amount" },
         { status: 400 }
       );
     }
 
+    // ✅ Generate secure unique orderId
+    const orderId = `order_${userId}_${planId}_${Date.now()}`;
+
+    // ✅ Fill safe defaults
     const safeCustomerEmail = customerEmail || "test@example.com";
-    const safeCustomerPhone = customerPhone || "9999999999"; // fallback for Cashfree
+    const safeCustomerPhone = customerPhone || "9999999999";
     const safeReturnUrl =
       returnUrl || `${process.env.NEXT_PUBLIC_BASE_URL}/payment-return`;
 
-    // 🔑 Call Cashfree API
+    // 🔑 Call Cashfree Create Order API
     const cfRes = await fetch(
       `${process.env.CASHFREE_BASE_URL}/pg/orders`,
       {
@@ -39,10 +43,10 @@ export async function POST(req) {
         },
         body: JSON.stringify({
           order_id: orderId,
-          order_amount: orderAmount,
+          order_amount: amount,
           order_currency: "INR",
           customer_details: {
-            customer_id: customerId,
+            customer_id: userId,
             customer_email: safeCustomerEmail,
             customer_phone: safeCustomerPhone,
           },
@@ -63,8 +67,10 @@ export async function POST(req) {
       );
     }
 
+    // ✅ Return order details + generated orderId
     return NextResponse.json({
       success: true,
+      orderId,
       order: cfData,
     });
   } catch (err) {
