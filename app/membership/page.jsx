@@ -116,7 +116,7 @@ export default function MembershipPage() {
           currentUser.displayName ||
           currentUser.email?.split('@')[0] ||
           'User',
-        userPhone: userProfile.profile?.phone || '9999999999',
+        // userPhone: userProfile.profile?.phone || '9999999999',
       };
 
       console.log('Sending request data to create-order:', requestData);
