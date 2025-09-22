@@ -9,13 +9,13 @@ import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 
 /**
- * Membership Page
+ * Membership Page - FIXED VERSION
  * - Shows membership plans for non-members
  * - Shows current membership status for members
  * - Handles payment success/failure redirects
+ * - Fixed payment flow integration
  */
 export default function MembershipPage() {
-  // FIX: Use currentUser and userProfile instead of user
   const { currentUser, userProfile, loading, refreshUserProfile } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -46,7 +46,14 @@ export default function MembershipPage() {
   const handlePaymentSuccess = async (orderId) => {
     setIsProcessing(true);
     try {
-      // Verify payment and update membership
+      // Get order token from session storage (set during payment initiation)
+      const orderToken = sessionStorage.getItem(`orderToken_${orderId}`);
+      
+      if (!orderToken) {
+        throw new Error('Order token not found. Please try again.');
+      }
+
+      // Verify payment
       const response = await fetch('/api/cashfree/verify-payment', {
         method: 'POST',
         headers: {
@@ -54,8 +61,8 @@ export default function MembershipPage() {
         },
         body: JSON.stringify({
           orderId: orderId,
-          userId: currentUser.uid, // FIX: Use currentUser
-          planId: extractPlanFromOrderId(orderId),
+          orderToken: orderToken,
+          userId: currentUser.uid, // Add userId for membership update
         }),
       });
 
@@ -64,15 +71,20 @@ export default function MembershipPage() {
       if (data.success) {
         setPaymentStatus({
           type: 'success',
-          message: `Congratulations! Your ${data.membership.planName} is now active.`,
+          message: `Congratulations! Your membership payment has been confirmed.`,
           membership: data.membership,
         });
         
         // Refresh user data to get updated membership
-        await refreshUserProfile(); // FIX: Use refreshUserProfile
+        await refreshUserProfile();
         
-        // Clear URL params
-        router.replace('/membership', { scroll: false });
+        // Clean up session storage
+        sessionStorage.removeItem(`orderToken_${orderId}`);
+        
+        // Clear URL params after delay
+        setTimeout(() => {
+          router.replace('/membership', { scroll: false });
+        }, 3000);
       } else {
         setPaymentStatus({
           type: 'error',
@@ -83,17 +95,11 @@ export default function MembershipPage() {
       console.error('Payment verification error:', error);
       setPaymentStatus({
         type: 'error',
-        message: 'Failed to verify payment. Please contact support.',
+        message: error.message || 'Failed to verify payment. Please contact support.',
       });
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const extractPlanFromOrderId = (orderId) => {
-    // Extract plan from order ID format: order_userId_planId_timestamp
-    const parts = orderId.split('_');
-    return parts[2] || 'annual'; // Default to annual if not found
   };
 
   const handleGoToDashboard = () => {
@@ -105,28 +111,51 @@ export default function MembershipPage() {
     router.replace('/membership', { scroll: false });
   };
 
-  // Handle plan selection and initiate payment
+  // FIXED: Handle plan selection and initiate payment
   const handlePlanSelection = async (planId) => {
+    if (!currentUser || !userProfile) {
+      setPaymentStatus({
+        type: 'error',
+        message: 'User information not loaded. Please refresh and try again.',
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+    
     try {
-      // Create payment order
+      // Create payment order with proper user data
       const response = await fetch('/api/cashfree/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: currentUser.uid,
           planId: planId,
+          userId: currentUser.uid,
+          userEmail: currentUser.email,
+          userName: userProfile.displayName || currentUser.displayName || 'User',
+          userPhone: userProfile.profile?.phone || null, // Optional phone
         }),
       });
       
       const data = await response.json();
       
       if (data.success) {
-        // Redirect to payment gateway
-        window.location.href = data.paymentUrl;
+        // Store order token for verification later
+        sessionStorage.setItem(`orderToken_${data.orderId}`, data.orderToken);
+        
+        // FIXED: Create payment URL for Cashfree hosted checkout
+        const paymentUrl = `https://payments${
+          process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-test'
+        }.cashfree.com/pg/web/checkout?order_token=${data.orderToken}`;
+        
+        console.log('Redirecting to payment URL:', paymentUrl);
+        
+        // Redirect to Cashfree hosted checkout
+        window.location.href = paymentUrl;
       } else {
         setPaymentStatus({
           type: 'error',
-          message: data.message || 'Failed to initiate payment. Please try again.',
+          message: data.error || 'Failed to initiate payment. Please try again.',
         });
       }
     } catch (error) {
@@ -135,6 +164,8 @@ export default function MembershipPage() {
         type: 'error',
         message: 'Failed to initiate payment. Please try again.',
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -144,7 +175,7 @@ export default function MembershipPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
           <p className="mt-4 text-gray-600">
-            {isProcessing ? 'Processing your payment...' : 'Loading...'}
+            {isProcessing ? 'Processing your request...' : 'Loading...'}
           </p>
         </div>
       </div>
