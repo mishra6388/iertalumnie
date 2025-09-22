@@ -1,5 +1,6 @@
 // constants/membershipPlans.js
 
+// Membership plans data
 export const MEMBERSHIP_PLANS = {
   ANNUAL: {
     id: 'annual',
@@ -39,20 +40,22 @@ export const MEMBERSHIP_PLANS = {
   }
 };
 
+// Get membership plan by id
 export const getMembershipPlan = (planId) => {
   return MEMBERSHIP_PLANS[planId.toUpperCase()] || null;
 };
 
+// Get all membership plans
 export const getAllMembershipPlans = () => {
   return Object.values(MEMBERSHIP_PLANS);
 };
 
-// Helper function to check if user has active membership
+// Check if user has active membership
 export const hasActiveMembership = (membershipStatus) => {
   return membershipStatus && membershipStatus !== 'none';
 };
 
-// Helper function to get membership display name
+// Get membership display name
 export const getMembershipDisplayName = (membershipStatus) => {
   switch (membershipStatus) {
     case 'annual':
@@ -62,4 +65,13 @@ export const getMembershipDisplayName = (membershipStatus) => {
     default:
       return 'Not a Member';
   }
+};
+
+// ----------------------
+// Add this function for formatting currency
+export const formatCurrency = (amount) => {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR'
+  }).format(amount);
 };

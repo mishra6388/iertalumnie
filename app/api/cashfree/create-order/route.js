@@ -1,96 +1,61 @@
-// app/api/cashfree/create-order/route.js
-import { NextResponse } from "next/server";
-import { db } from "@/lib/firebase-admin";
+import { NextResponse } from 'next/server';
 
-/**
- * POST /api/cashfree/create-order
- * Body: { userId, planId }
- */
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { userId, planId } = body;
+    console.log('Received create-order request:', body);
 
-    if (!userId || !planId) {
-      return NextResponse.json(
-        { error: "Missing required fields: userId or planId" },
-        { status: 400 }
-      );
+    const { planId, userId, userEmail, userName, userPhone } = body;
+
+    if (!planId || !userId || !userEmail || !userName || !userPhone) {
+      console.warn('Missing required fields:', { planId, userId, userEmail, userName, userPhone });
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // Generate a unique order ID (format: order_userId_planId_timestamp)
-    const timestamp = Date.now();
-    const orderId = `order_${userId}_${planId}_${timestamp}`;
+    // Create order payload for Cashfree
+    const orderPayload = {
+      order_id: `ALUMNI_${Date.now()}`, // unique order id
+      order_amount: body.amount || 500, // fallback amount
+      customer_details: {
+        customer_id: userId,
+        customer_email: userEmail,
+        customer_name: userName,
+        customer_phone: userPhone,
+      },
+      order_currency: 'INR',
+    };
 
-    // Get plan details from your constants
-    const { getMembershipPlan } = await import("@/constants/membershipPlans");
-    const plan = getMembershipPlan(planId);
-
-    if (!plan) {
-      return NextResponse.json({ error: "Invalid membership plan" }, { status: 400 });
-    }
-
-    // Create order in Firestore as "pending"
-    await db.collection("orders").doc(orderId).set({
-      orderId,
-      userId,
-      planId,
-      planName: plan.name,
-      amount: plan.price,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    });
-
-    // Call Cashfree create order API
-    const createOrderResponse = await fetch(
-      `${process.env.CASHFREE_BASE_URL}/pg/orders`,
+    // Call Cashfree API (server-side)
+    const cashfreeResponse = await fetch(
+      `https://api${process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-sandbox'}.cashfree.com/pg/orders`,
       {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
-          "x-client-id": process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-          "x-api-version": "2023-08-01",
+          'Content-Type': 'application/json',
+          'x-client-id': process.env.CASHFREE_CLIENT_ID,
+          'x-client-secret': process.env.CASHFREE_CLIENT_SECRET,
         },
-        body: JSON.stringify({
-          order_id: orderId,
-          order_amount: plan.price,
-          order_currency: "INR",
-          customer_details: {
-            customer_id: userId,
-          },
-        }),
+        body: JSON.stringify(orderPayload),
       }
     );
 
-    const orderData = await createOrderResponse.json();
+    const data = await cashfreeResponse.json();
+    console.log('Cashfree create order response:', data);
 
-    if (!createOrderResponse.ok) {
-      console.error("Cashfree create order error:", orderData);
-      return NextResponse.json(
-        { error: "Failed to create Cashfree order", details: orderData },
-        { status: 502 }
-      );
+    if (!data.order_id || !data.order_token) {
+      return NextResponse.json({ error: 'Failed to create Cashfree order', details: data }, { status: 500 });
     }
-
-    // Optionally update Firestore with Cashfree response
-    await db.collection("orders").doc(orderId).update({
-      cashfreeOrderResponse: orderData,
-    });
 
     return NextResponse.json({
       success: true,
-      orderId,
-      planId,
-      amount: plan.price,
-      cashfreeOrder: orderData,
-      message: "Order created successfully",
+      orderId: data.order_id,
+      orderToken: data.order_token,
+      checkoutUrl: `https://payments${
+        process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === 'production' ? '' : '-sandbox'
+      }.cashfree.com/pg/web/checkout?order_token=${data.order_token}`,
     });
   } catch (error) {
-    console.error("Create order internal error:", error);
-    return NextResponse.json(
-      { error: "Internal server error", details: error.message },
-      { status: 500 }
-    );
+    console.error('Create order error:', error);
+    return NextResponse.json({ error: 'Server error', details: error.message }, { status: 500 });
   }
 }
