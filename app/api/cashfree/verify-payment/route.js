@@ -1,10 +1,33 @@
 // app/api/cashfree/verify-payment/route.js
-import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase-admin'; // You'll need Firebase Admin
-import { getMembershipPlan } from '@/constants/membershipPlans';
+import { NextResponse } from "next/server";
+import admin from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+import { getMembershipPlan } from "@/constants/membershipPlans";
 
 /**
- * FIXED: Verify Cashfree Payment & Update User Membership
+ * Initialize Firebase Admin safely with Base64 service account
+ */
+let db;
+if (!admin.getApps().length) {
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_BASE64 environment variable");
+  }
+
+  const serviceAccount = JSON.parse(
+    Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8")
+  );
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    projectId: serviceAccount.project_id,
+  });
+
+  db = getFirestore();
+} else {
+  db = getFirestore(admin.getApps()[0]);
+}
+
+/**
  * POST /api/cashfree/verify-payment
  * Body: { orderId, orderToken, userId }
  */
@@ -13,44 +36,41 @@ export async function POST(req) {
     const body = await req.json();
     const { orderId, orderToken, userId } = body;
 
-    // Validate input
     if (!orderId || !orderToken) {
       return NextResponse.json(
-        { error: 'Missing required fields: orderId or orderToken' },
+        { error: "Missing required fields: orderId or orderToken" },
         { status: 400 }
       );
     }
 
-    // Extract planId from orderId (format: order_userId_planId_timestamp)
-    const orderParts = orderId.split('_');
+    const orderParts = orderId.split("_");
     const planId = orderParts[2];
-    
+
     if (!planId) {
       return NextResponse.json(
-        { error: 'Invalid order ID format' },
+        { error: "Invalid order ID format" },
         { status: 400 }
       );
     }
 
-    // Get plan details
     const plan = getMembershipPlan(planId);
     if (!plan) {
       return NextResponse.json(
-        { error: 'Invalid membership plan' },
+        { error: "Invalid membership plan" },
         { status: 400 }
       );
     }
 
-    // Call Cashfree verify payment API
+    // Call Cashfree verify API
     const verifyResponse = await fetch(
       `${process.env.CASHFREE_BASE_URL}/pg/orders/${orderId}/payments`,
       {
-        method: 'GET',
+        method: "GET",
         headers: {
-          'Content-Type': 'application/json',
-          'x-client-id': process.env.CASHFREE_APP_ID,
-          'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-          'x-api-version': '2023-08-01',
+          "Content-Type": "application/json",
+          "x-client-id": process.env.CASHFREE_APP_ID,
+          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+          "x-api-version": "2023-08-01",
         },
       }
     );
@@ -58,130 +78,117 @@ export async function POST(req) {
     const verifyData = await verifyResponse.json();
 
     if (!verifyResponse.ok) {
-      console.error('Cashfree verify API error:', verifyData);
+      console.error("Cashfree verify API error:", verifyData);
       return NextResponse.json(
-        { error: 'Payment verification failed', details: verifyData },
+        { error: "Payment verification failed", details: verifyData },
         { status: 502 }
       );
     }
 
-    // Check if payment exists and is successful
-    const payment = verifyData[0]; // Get the first payment
-    
-    if (!payment || payment.payment_status !== 'SUCCESS') {
-      console.warn(`Payment not successful for order ${orderId}:`, payment?.payment_status);
+    const payment = verifyData[0]; // take the first payment
+
+    if (!payment || payment.payment_status !== "SUCCESS") {
       return NextResponse.json({
         success: false,
         orderId,
-        status: payment?.payment_status || 'UNKNOWN',
-        message: 'Payment not successful',
+        status: payment?.payment_status || "UNKNOWN",
+        message: "Payment not successful",
       });
     }
 
-    // Payment is successful - Update user membership in Firebase
+    // Payment successful — update Firestore
     if (userId) {
       try {
+        const now = new Date();
         const membershipData = {
-          status: 'active',
-          planId: planId,
+          status: "active",
+          planId,
           planName: plan.name,
           durationType: plan.durationType,
-          startDate: new Date().toISOString(),
-          expiryDate: calculateExpiryDate(plan.durationType),
+          startDate: now.toISOString(),
+          expiryDate: calculateExpiryDate(plan.durationType, now),
           amount: plan.price,
           paymentId: payment.cf_payment_id,
-          orderId: orderId,
-          updatedAt: new Date().toISOString(),
+          orderId,
+          updatedAt: now.toISOString(),
         };
 
-        // Update user's membership in Firestore
-        await db.collection('users').doc(userId).update({
+        // Update user
+        await db.collection("users").doc(userId).update({
           membership: membershipData,
-          updatedAt: new Date().toISOString(),
+          updatedAt: now.toISOString(),
         });
 
-        // Also create a separate membership record for tracking
-        await db.collection('memberships').doc(`${userId}_${orderId}`).set({
-          userId: userId,
-          orderId: orderId,
+        // Add membership record
+        await db.collection("memberships").doc(`${userId}_${orderId}`).set({
+          userId,
+          orderId,
           paymentId: payment.cf_payment_id,
-          planId: planId,
+          planId,
           planName: plan.name,
           amount: plan.price,
-          status: 'active',
-          startDate: new Date().toISOString(),
-          expiryDate: calculateExpiryDate(plan.durationType),
+          status: "active",
+          startDate: now.toISOString(),
+          expiryDate: calculateExpiryDate(plan.durationType, now),
           paymentData: {
             payment_method: payment.payment_method,
             payment_status: payment.payment_status,
             payment_time: payment.payment_time,
           },
-          createdAt: new Date().toISOString(),
+          createdAt: now.toISOString(),
         });
 
-        console.log(`Membership updated successfully for user ${userId}, order ${orderId}`);
-        
         return NextResponse.json({
           success: true,
           orderId,
           paymentId: payment.cf_payment_id,
           amount: payment.payment_amount,
           status: payment.payment_status,
-          message: 'Payment verified and membership activated successfully',
+          message: "Payment verified and membership activated successfully",
           membership: membershipData,
         });
-
       } catch (firestoreError) {
-        console.error('Error updating membership in Firebase:', firestoreError);
-        
-        // Payment was successful but membership update failed
-        // In production, you might want to queue this for retry
+        console.error("Firestore update error:", firestoreError);
         return NextResponse.json({
           success: false,
           orderId,
           status: payment.payment_status,
-          message: 'Payment successful but membership update failed. Please contact support.',
-          error: 'MEMBERSHIP_UPDATE_FAILED',
+          message:
+            "Payment successful but membership update failed. Contact support.",
+          error: "MEMBERSHIP_UPDATE_FAILED",
         });
       }
-    } else {
-      // No userId provided, just return payment status
-      console.log(`Payment successful for order ${orderId} but no userId provided`);
-      return NextResponse.json({
-        success: true,
-        orderId,
-        amount: payment.payment_amount,
-        status: payment.payment_status,
-        message: 'Payment verified successfully',
-      });
     }
 
+    // No userId provided, return payment info
+    return NextResponse.json({
+      success: true,
+      orderId,
+      amount: payment.payment_amount,
+      status: payment.payment_status,
+      message: "Payment verified successfully",
+    });
   } catch (error) {
-    console.error('Verify payment internal error:', error);
+    console.error("Verify payment error:", error);
     return NextResponse.json(
-      { error: 'Internal server error', details: error.message },
+      { error: "Internal server error", details: error.message },
       { status: 500 }
     );
   }
 }
 
 /**
- * Calculate membership expiry date based on plan type
+ * Calculate membership expiry date
  */
-function calculateExpiryDate(durationType) {
-  const now = new Date();
-  
+function calculateExpiryDate(durationType, fromDate = new Date()) {
+  const now = new Date(fromDate);
+
   switch (durationType) {
-    case 'annual':
-      // Add 1 year
+    case "annual":
       return new Date(now.getFullYear() + 1, now.getMonth(), now.getDate()).toISOString();
-    
-    case 'lifetime':
-      // Add 100 years (effectively lifetime)
+    case "lifetime":
       return new Date(now.getFullYear() + 100, now.getMonth(), now.getDate()).toISOString();
-    
     default:
-      // Default to 1 year
       return new Date(now.getFullYear() + 1, now.getMonth(), now.getDate()).toISOString();
   }
 }
