@@ -1,67 +1,102 @@
-import { NextResponse } from "next/server";
+// app/api/cashfree/create-order/route.js
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { getMembershipPlan } from '@/constants/membershipPlans';
 
-export async function POST(req) {
+/**
+ * Create Cashfree Payment Order API
+ * POST /api/cashfree/create-order
+ * 
+ * Body: {
+ *   planId: string,
+ *   userId: string,
+ *   userEmail: string,
+ *   userName: string,
+ *   userPhone: string
+ * }
+ */
+export async function POST(request) {
   try {
-    const { userId, planId } = await req.json();
+    const { planId, userId, userEmail, userName, userPhone } = await request.json();
+    
+    // Validate required fields
+    if (!planId || !userId || !userEmail || !userName) {
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      );
+    }
 
+    // Get membership plan details
+    const plan = getMembershipPlan(planId);
+    if (!plan) {
+      return NextResponse.json(
+        { error: 'Invalid plan selected' },
+        { status: 400 }
+      );
+    }
+
+    // Generate unique order ID
     const orderId = `order_${userId}_${planId}_${Date.now()}`;
+
+    // Prepare Cashfree order data
     const orderData = {
       order_id: orderId,
-      order_amount: 1, // test amount
-      order_currency: "INR",
+      order_amount: plan.price,
+      order_currency: 'INR',
+      order_note: `${plan.name} - Alumni Membership`,
       customer_details: {
         customer_id: userId,
-        customer_email: "test@example.com",
-        customer_phone: "9999999999",
+        customer_name: userName,
+        customer_email: userEmail,
+        customer_phone: userPhone || '9999999999', // Default if phone not provided
       },
       order_meta: {
         return_url: `${process.env.NEXT_PUBLIC_BASE_URL}/membership?success=true&orderId=${orderId}`,
         notify_url: `${process.env.NEXT_PUBLIC_BASE_URL}/api/cashfree/webhook`,
+        payment_methods: 'cc,dc,nb,upi,app,paylater,cardless_emi,wallet',
       },
+      order_expiry_time: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
     };
 
-    const cfResp = await fetch(
-      `${process.env.CASHFREE_BASE_URL}/orders`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-client-id": process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-          "x-api-version": "2022-09-01",
-        },
-        body: JSON.stringify(orderData),
-      }
-    );
+    // Make request to Cashfree API
+    const cashfreeResponse = await fetch(`${process.env.CASHFREE_BASE_URL}/pg/orders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-client-id': process.env.CASHFREE_APP_ID,
+        'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+        'x-api-version': '2023-08-01',
+      },
+      body: JSON.stringify(orderData),
+    });
 
-    // DEBUG LOG
-    const rawResponse = await cfResp.text();
-    console.log("Cashfree API Status:", cfResp.status);
-    console.log("Cashfree Raw Response:", rawResponse);
+    const cashfreeData = await cashfreeResponse.json();
 
-    let data;
-    try {
-      data = JSON.parse(rawResponse);
-    } catch {
-      data = { message: rawResponse };
-    }
-
-    if (!cfResp.ok) {
+    if (!cashfreeResponse.ok) {
+      console.error('Cashfree API Error:', cashfreeData);
       return NextResponse.json(
-        { success: false, message: data.message || "Cashfree order creation failed" },
-        { status: cfResp.status }
+        { error: 'Failed to create payment order' },
+        { status: 500 }
       );
     }
 
+    // Store order in database (you can implement this later)
+    // await storeOrder(orderId, userId, planId, plan.price, 'created');
+
     return NextResponse.json({
       success: true,
-      orderId,
-      paymentUrl: data.payment_link,
+      orderId: orderId,
+      paymentSessionId: cashfreeData.payment_session_id,
+      orderToken: cashfreeData.order_token,
+      amount: plan.price,
+      planName: plan.name,
     });
-  } catch (err) {
-    console.error("Create Order Error:", err);
+
+  } catch (error) {
+    console.error('Create order error:', error);
     return NextResponse.json(
-      { success: false, message: "Internal server error" },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }
