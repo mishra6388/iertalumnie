@@ -1,116 +1,141 @@
 // app/api/cashfree/verify-payment/route.js
-import { NextResponse } from "next/server";
-import { db } from "@/lib/firebase";
-import { doc, updateDoc, getDoc } from "firebase/firestore";
-import { getMembershipPlan } from "@/constants/membershipPlans";
+import { NextResponse } from 'next/server';
+import { verifyCashfreePayment, isPaymentSuccessful } from '@/lib/cashfree';
+import { adminAuth, adminDb } from '@/lib/firebase-admin';
 
-/**
- * Verify Cashfree Payment
- * POST /api/cashfree/verify-payment
- */
-export async function POST(req) {
+export async function POST(request) {
   try {
-    const body = await req.json();
-    const { orderId } = body;
+    const body = await request.json();
+    const { orderId, userToken } = body;
 
-    if (!orderId) {
+    // Validate required fields
+    if (!orderId || !userToken) {
       return NextResponse.json(
-        { success: false, error: "Missing orderId" },
+        { success: false, error: 'Missing required fields' },
         { status: 400 }
       );
     }
 
-    // ✅ 1. Check order in Firestore
-    const orderRef = doc(db, "orders", orderId);
-    const orderSnap = await getDoc(orderRef);
-
-    if (!orderSnap.exists()) {
+    // Verify Firebase token
+    let decodedToken;
+    try {
+      decodedToken = await adminAuth.verifyIdToken(userToken);
+    } catch (error) {
       return NextResponse.json(
-        { success: false, error: "Order not found" },
+        { success: false, error: 'Invalid authentication token' },
+        { status: 401 }
+      );
+    }
+
+    const userId = decodedToken.uid;
+
+    // Get order from Firestore
+    const orderDoc = await adminDb.collection('orders').doc(orderId).get();
+    
+    if (!orderDoc.exists) {
+      return NextResponse.json(
+        { success: false, error: 'Order not found' },
         { status: 404 }
       );
     }
 
-    const orderData = orderSnap.data();
+    const orderData = orderDoc.data();
 
-    // ✅ 2. Fetch status from Cashfree API
-    const environment =
-      process.env.NEXT_PUBLIC_CASHFREE_ENVIRONMENT === "production"
-        ? "production"
-        : "sandbox";
-
-    const baseUrl =
-      environment === "production"
-        ? "https://api.cashfree.com/pg"
-        : "https://sandbox.cashfree.com/pg";
-
-    const cfResponse = await fetch(
-      `${baseUrl}/orders/${orderData.orderId}`,
-      {
-        method: "GET",
-        headers: {
-          "x-api-version": "2023-08-01",
-          "x-client-id": process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-        },
-      }
-    );
-
-    const cfData = await cfResponse.json();
-
-    if (!cfResponse.ok) {
+    // Verify order belongs to user
+    if (orderData.userId !== userId) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "Failed to fetch from Cashfree",
-          details: cfData,
-        },
-        { status: 502 }
+        { success: false, error: 'Unauthorized access to order' },
+        { status: 403 }
       );
     }
 
-    const paymentStatus = cfData.order_status;
+    // Verify payment with Cashfree
+    const verificationResult = await verifyCashfreePayment(orderId);
 
-    // ✅ 3. Update order in Firestore
-    await updateDoc(orderRef, {
-      status: paymentStatus,
-      updatedAt: new Date().toISOString(),
-    });
-
-    // ✅ 4. If success → update user’s membership
-    if (paymentStatus === "PAID") {
-      const plan = getMembershipPlan(orderData.planId);
-
-      if (plan) {
-        const userRef = doc(db, "users", orderData.userId);
-
-        const expiryDate = new Date();
-        expiryDate.setMonth(expiryDate.getMonth() + plan.durationMonths);
-
-        await updateDoc(userRef, {
-          membership: {
-            planId: orderData.planId,
-            planName: plan.name,
-            activatedAt: new Date().toISOString(),
-            expiresAt: expiryDate.toISOString(),
-            orderId: orderData.orderId,
-          },
-        });
-      }
+    if (!verificationResult.success) {
+      return NextResponse.json(
+        { success: false, error: verificationResult.error },
+        { status: 500 }
+      );
     }
 
-    // ✅ 5. Respond to frontend
+    const paymentData = verificationResult.data;
+    const paymentSuccessful = isPaymentSuccessful(paymentData.orderStatus);
+
+    // Update order status in Firestore
+    const updateData = {
+      status: paymentData.orderStatus,
+      paymentStatus: paymentData.paymentStatus,
+      paymentTime: paymentData.paymentTime,
+      updatedAt: new Date(),
+      verificationData: paymentData
+    };
+
+    await adminDb.collection('orders').doc(orderId).update(updateData);
+
+    // If payment successful, update user membership
+    if (paymentSuccessful) {
+      const membershipData = {
+        membershipStatus: 'active',
+        membershipPlan: orderData.planId,
+        membershipStartDate: new Date(),
+        membershipEndDate: orderData.planId === 'lifetime' 
+          ? null 
+          : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
+        lastPaymentDate: new Date(),
+        lastPaymentAmount: orderData.amount,
+        updatedAt: new Date()
+      };
+
+      // Update user document
+      await adminDb.collection('users').doc(userId).update(membershipData);
+
+      // Create membership record
+      const membershipRecord = {
+        userId: userId,
+        orderId: orderId,
+        planId: orderData.planId,
+        planName: orderData.planDetails.name,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        startDate: new Date(),
+        endDate: membershipData.membershipEndDate,
+        status: 'active',
+        paymentMethod: 'cashfree',
+        createdAt: new Date()
+      };
+
+      await adminDb.collection('memberships').add(membershipRecord);
+    }
+
     return NextResponse.json({
       success: true,
-      orderId,
-      status: paymentStatus,
-      cfData,
+      data: {
+        orderId: orderId,
+        paymentStatus: paymentData.orderStatus,
+        paymentSuccessful: paymentSuccessful,
+        amount: paymentData.orderAmount,
+        currency: paymentData.orderCurrency,
+        paymentTime: paymentData.paymentTime
+      }
     });
+
   } catch (error) {
-    console.error("💥 Verify payment error:", error);
+    console.error('Verify payment API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: 'Internal server error' },
       { status: 500 }
     );
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
+  });
 }
