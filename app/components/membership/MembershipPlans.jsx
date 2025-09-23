@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { usePayment } from '@/hooks/usePayment';
+// import { usePayment } from '@/hooks/usePayment';
 import { MEMBERSHIP_PLANS } from '@/lib/cashfree';
 
 export default function MembershipPlans() {
