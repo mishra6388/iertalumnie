@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cashfreepayments/cashfree-js": "^1.0.5",
+    "cashfree-pg": "^5.0.8",
     "firebase": "^12.3.0",
     "firebase-admin": "^13.5.0",
     "next": "15.5.3",
