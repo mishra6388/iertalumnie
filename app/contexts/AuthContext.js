@@ -1,4 +1,4 @@
-// app/contexts/AuthContext.jsx - SIMPLIFIED VERSION
+// app/contexts/AuthContext.jsx - YOUR CODE WITH MINIMAL REQUIRED FIXES
 'use client';
 
 import { createContext, useContext, useEffect, useState } from 'react';
@@ -27,6 +27,19 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // 🔥 ADD THIS: Required for payment API authentication
+  const getIdToken = async () => {
+    if (!currentUser) {
+      throw new Error('User not authenticated');
+    }
+    try {
+      return await currentUser.getIdToken();
+    } catch (error) {
+      console.error('Error getting ID token:', error);
+      throw error;
+    }
+  };
+
   const fetchUserProfile = async (user) => {
     if (!user) {
       setUserProfile(null);
@@ -42,8 +55,10 @@ export function AuthProvider({ children }) {
           uid: user.uid,
           email: user.email,
           displayName: user.displayName || '',
+          name: user.displayName || '', // 🔥 ADD THIS: Required by payment system
           photoURL: user.photoURL || '',
-          membershipStatus: 'none',
+          membershipStatus: 'pending', // 🔥 CHANGE THIS: From 'none' to 'pending'
+          membershipPlan: null, // 🔥 ADD THIS: Required for payment tracking
           createdAt: new Date(),
         });
       }
@@ -53,8 +68,10 @@ export function AuthProvider({ children }) {
         uid: user.uid,
         email: user.email,
         displayName: user.displayName || '',
+        name: user.displayName || '', // 🔥 ADD THIS
         photoURL: user.photoURL || '',
-        membershipStatus: 'none',
+        membershipStatus: 'pending', // 🔥 CHANGE THIS
+        membershipPlan: null, // 🔥 ADD THIS
         createdAt: new Date(),
       });
     }
@@ -77,11 +94,16 @@ export function AuthProvider({ children }) {
   }, []);
 
   const value = {
+    // Your original properties
     currentUser,
     userProfile,
     logout,
     loading,
     refreshUserProfile: () => fetchUserProfile(currentUser),
+    
+    // 🔥 ADD THESE: Required for payment system
+    user: currentUser, // usePayment hook expects 'user' not 'currentUser'
+    getIdToken, // CRITICAL: For API authentication
   };
 
   if (loading) {
